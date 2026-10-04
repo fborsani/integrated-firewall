@@ -1,0 +1,98 @@
+---
+- name: Configure Pi-Hole lists
+  block:
+    - name: Create staging folder
+      ansible.builtin.file:
+        path: "{{ pihole_rule_files_staging_folder }}"
+        state: directory
+
+    - name: Retrieve blacklists
+      ansible.builtin.include_role:
+        name: utils
+        tasks_from: gather_files
+      vars:
+        source_list: "{{ pihole.blacklists.local | default([])}}"
+        output_var: blacklist_files
+
+    - name: Retrieve whitelists
+      ansible.builtin.include_role:
+        name: utils
+        tasks_from: gather_files
+      vars:
+        source_list: "{{ pihole.whitelists.local | default([])}}"
+        output_var: whitelist_files
+
+    - name: Deploy rule generation script
+      ansible.builtin.template:
+        src: import_lists.py.j2
+        dest: "{{ pihole_rule_configurator_script }}"
+        owner: "{{ global.file_owner }}"
+        group: "{{ global.file_group }}"
+        mode: "0700"
+
+    - name: Run script
+      ansible.builtin.command: "python3 {{ pihole_rule_configurator_script }}"
+      register: result
+
+    - name: Print script output
+      ansible.builtin.debug:
+        var: result.stdout
+
+    - name: Start temporary Pi-hole blacklist server
+      community.docker.docker_container:
+        name: "{{ pihole_list_server_name }}"
+        image: python:3-alpine
+        state: started
+        restart_policy: "no"
+        networks:
+          - name: "{{ pihole_docker_network_name }}"
+        volumes:
+          - "{{ pihole_rule_files_staging_folder }}:/srv:ro"
+        command:
+          - python3
+          - -m
+          - http.server
+          - "{{ pihole_list_server_port | string }}"
+          - --directory
+          - /srv
+      when: (pihole.blacklists.local | default([]) | length > 0) or (pihole.whitelists.local | default([]) | length > 0)
+
+    - name: Apply SQL script to Pi-hole gravity database
+      community.docker.docker_container_exec:
+        container: "{{ pihole_container_name }}"
+        argv: 
+          - pihole-FTL
+          - sqlite3 
+          - /etc/pihole/gravity.db
+          - ".read {{ pihole_container_sql_folder }}/{{ pihole_docker_sql_file }}"
+      changed_when: true
+
+    - name: Rebuild Pi-hole gravity database
+      community.docker.docker_container_exec:
+        container: "{{ pihole_container_name }}"
+        argv: 
+          - pihole
+          - -g
+      changed_when: true
+
+  always:
+    - name: Stop Pi-hole blacklist server
+      community.docker.docker_container:
+        name: "{{ pihole_list_server_name }}"
+        state: absent
+
+    - name: Remove staging folder
+      ansible.builtin.file:
+        path: "{{ pihole_rule_configurator_script }}"
+        state: absent
+
+    - name: Remove setup script
+      ansible.builtin.file:
+        path: "{{ pihole_rule_configurator_script }}"
+        state: absent
+
+    - name: Remove sql script
+      ansible.builtin.file:
+        path: "{{ pihole_docker_sql_volume }}/{{ pihole_docker_sql_file }}"
+        state: absent
+

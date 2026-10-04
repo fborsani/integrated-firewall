@@ -1,0 +1,78 @@
+# Perform a backup of a file to a specified directory. 
+# The backup file will be stored under <backup_folder>/<source_file>.bak
+# If action is restore then the current file is replaced with the backup and the backup is deleted-
+# Inputs:
+# - source_file: path to source file
+# - backup_folder: path to backup folder
+# - mode: <backup|restore|delete>
+# Outputs:
+# - backup_path: path to generated backup
+---
+- name: Get backup file path
+  ansible.builtin.set_fact:
+    backup_path: "{{ backup_folder }}/{{ source_file | hash('sha256') }}_{{ source_file | basename }}.bak"
+
+- name: Backup
+  block:
+    - name: "Backup {{ source_file }}"
+      ansible.builtin.copy:
+        src: "{{ source_file }}"
+        dest: "{{ backup_path }}"
+        owner: "{{ global.file_owner }}"
+        group: "{{ global.file_group }}"
+        mode: "{{ global.file_perms }}"
+        force: false
+        remote_src: true
+
+    - name: Make backup immutable
+      ansible.builtin.file:
+        path: "{{ backup_path }}"
+        attributes: +i
+  when: mode == "backup"
+
+- name: Restore
+  block:
+    - name: "Check for backup in path {{ backup_path }}"
+      ansible.builtin.stat:
+        path: "{{ backup_path }}"
+      register: backup_file
+
+    - name: Get source file metadata
+      ansible.builtin.stat:
+        path: "{{ source_file }}"
+      register: source_stat
+
+    - name: "Restore {{ source_file }}"
+      block:
+        - ansible.builtin.copy:
+            src: "{{ backup_path }}"
+            dest: "{{ source_file }}"
+            owner: "{{ source_stat.stat.pw_name }}"
+            group: "{{ source_stat.stat.gr_name }}"
+            mode: "{{ source_stat.stat.mode }}"
+            remote_src: true
+
+        - name: Make backup mutable
+          ansible.builtin.file:
+            path: "{{ backup_path }}"
+            attributes: -i
+
+        - name: Delete backup
+          ansible.builtin.file:
+            path: "{{ backup_path }}"
+            state: absent
+      when: backup_file.stat.exists
+  when: mode == "restore"
+
+- name: "Delete {{ backup_path }}"
+  block:
+  - name: Make backup mutable
+    ansible.builtin.file:
+      path: "{{ file_path }}"
+      attributes: -i
+
+  - name: Delete backup
+    ansible.builtin.file:
+      path: "{{ backup_path }}"
+      state: absent
+  when: mode == "delete"

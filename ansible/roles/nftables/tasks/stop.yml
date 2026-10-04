@@ -1,0 +1,15 @@
+---
+- name: Restore default config
+  ansible.builtin.include_role:
+    name: utils
+    tasks_from: backup_restore_file
+  vars:
+    source_file: "{{ nftables_default_table }}"
+    backup_folder: "{{ nftables_work_dir }}"
+    mode: restore
+
+- name: stop nftables service
+  ansible.builtin.systemd:
+    name: "{{ nftables_service_name }}"
+    enabled: false
+    state: stopped

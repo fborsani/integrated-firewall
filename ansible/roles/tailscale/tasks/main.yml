@@ -1,0 +1,58 @@
+---
+- name: Create Tailscale state directory
+  ansible.builtin.file:
+    path: "{{ tailscale_work_dir }}/lib/tailscale"
+    state: directory
+    owner: "{{ global.file_owner }}"
+    group: "{{ global.file_group }}"
+    mode: "{{ global.file_perms }}"
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+
+- name: Enable IPv6 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv6.conf.all.forwarding
+    value: "1"
+    state: present
+    reload: true
+
+- name: Build Tailscale arguments
+  ansible.builtin.set_fact:
+    tailscale_extra_args: >-
+      {{
+        []
+        + (['--shields-up'] if tailscale.shields_up else [])
+        + (['--accept-routes'] if tailscale.host_config.accept_routes else [])
+        + (['--ssh'] if tailscale.host_config.ssh_enabled else [])
+        + (['--advertise-tags=' + (tailscale.host_config.advertise_tags | join(','))] if tailscale.host_config.advertise_tags | length > 0 else [])
+        + ['--advertise-exit-node']
+      }}
+
+- name: Run Tailscale container
+  community.docker.docker_container:
+    name: "{{ tailscale_container_name }}"
+    image: "{{ tailscale_image }}:{{ tailscale.version }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host
+    privileged: true
+    capabilities:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - "{{ tailscale_tun_interface }}:/dev/net/tun"
+    volumes:
+      - "{{ tailscale_work_dir }}/lib/tailscale:/var/lib/tailscale"
+    env:
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTHKEY: "{{ tailscale.auth_key }}"
+      TS_HOSTNAME: "{{ tailscale.host_config.hostname }}"
+      TS_ACCEPT_DNS: "false"
+      TS_EXTRA_ARGS: "{{ tailscale_extra_args | join(' ') }}"
+    pull: true
+

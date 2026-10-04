@@ -1,0 +1,158 @@
+---
+- name: Create Pi-hole work dir
+  ansible.builtin.file:
+    path: "{{ pihole_work_dir }}"
+    state: directory
+    owner: "{{ global.file_owner }}"
+    group: "{{ global.file_group }}"
+    mode: "{{ global.file_perms }}"
+
+- name: Create Pi-hole volumes
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ pihole_user_id }}"
+    group: "{{ pihole_group_id }}"
+    mode: "755"
+    recurse: true
+  loop:
+    - "{{ pihole_work_dir }}/etc-pihole"
+    - "{{ pihole_work_dir }}/etc-dnsmasq.d"
+    - "{{ pihole_docker_sql_volume }}"
+
+- name: Install dns service
+  block:
+    - name: Create Pi-Hole network
+      community.docker.docker_network:
+        name: "{{ pihole_docker_network_name }}"
+        driver: bridge
+        ipam_config:
+          - subnet: "{{ pihole.subnet }}"
+            gateway: "{{ pihole.gateway_ip }}"
+
+    - name: Run Pi-hole container
+      community.docker.docker_container:
+        name: "{{ pihole_container_name }}"
+        image: "{{ pihole_image }}:{{ pihole.version }}"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: "{{ pihole_docker_network_name }}"
+            ipv4_address: "{{ pihole.resolver_ipv4_address }}"
+        ports: >-
+          {{
+            ["53:53/tcp", "53:53/udp"]
+            + ([pihole.dashboard.port ~ ":80/tcp"]
+              if pihole.dashboard.enabled | default(false)
+              else [])
+          }}
+        volumes:
+          - "{{ pihole_work_dir }}/etc-pihole:/etc/pihole"
+          - "{{ pihole_work_dir }}/etc-dnsmasq.d:/etc/dnsmasq.d"
+          - "{{ pihole_docker_sql_volume }}:{{ pihole_container_sql_folder }}"
+        env:
+          TZ: "{{ global.timezone }}"
+          FTLCONF_webserver_api_password: "{{ pihole.dashboard.web_password }}"
+          PIHOLE_DNS_: "{{ pihole.upstream_dns | join(';') }}"
+          PIHOLE_UID: "{{ pihole_user_id | string }}"
+          PIHOLE_GID: "{{ pihole_group_id | string }}"
+        capabilities:
+          - NET_ADMIN
+        pull: true
+
+    - name: Start list import
+      ansible.builtin.import_tasks: 
+        file: import_lists.yml
+      when: pihole.always_reload_lists
+
+    - name: Check if resolv.conf is already configured
+      ansible.builtin.lineinfile:
+        path: /etc/resolv.conf
+        regexp: '^{{ pihole_managed_resolv_conf_tag }}$'
+        state: absent
+      check_mode: true
+      changed_when: false
+      register: resolv_conf_marker
+
+    - name: Backup resolv.conf
+      ansible.builtin.include_role:
+        name: utils
+        tasks_from: backup_restore_file
+      vars:
+        source_file: /etc/resolv.conf
+        backup_folder: "{{ pihole_work_dir }}"
+        mode: backup
+      when: resolv_conf_marker.found | default(0) == 0
+
+    - name: Replace resolv.conf with Pi-hole resolver
+      ansible.builtin.template:
+        src: resolv.conf.j2
+        dest: /etc/resolv.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Clear user-defined domains
+      community.docker.docker_container_exec:
+        container: "{{ pihole_container_name }}"
+        argv:
+          - sh
+          - -c
+          - |
+            i=$(pihole {{ item }} --list | grep -oE '"[^"]+"' | tr -d '"')
+            if [ -n "$i" ]; then
+              pihole {{ item }} delete $i
+            else
+              echo "{{ item }}: Nothing to do"
+            fi
+      loop:
+        - allow
+        - deny
+        - --allow-wild
+        - --wild
+        - --allow-regex
+        - --regex
+
+    - name: Load user-defined domains
+      community.docker.docker_container_exec:
+        container: "{{ pihole_container_name }}"
+        argv: >-
+          {{
+            ['pihole',
+            {
+              'allow:exact': 'allow',
+              'deny:exact': 'deny',
+              'allow:regex': '--allow-regex',
+              'deny:regex': '--regex',
+              'allow:wildcard': '--allow-wild',
+              'deny:wildcard': '--wild'
+            }[(item.action | default("deny")) ~ ':' ~ (item.match | default('exact'))],
+            item.domain]
+          }}
+      loop: "{{ pihole.user_defined_domains | list | default([], true) }}"
+
+    - name: Load user-defined allowed domains
+      community.docker.docker_container_exec:
+        container: "{{ pihole_container_name }}"
+        argv:
+          - pihole 
+          - allow
+          - "{{ pihole.whitelists.user_defined_domains | join(' ') }}"
+      when:
+        - pihole.whitelists.user_defined_domains is defined
+        - pihole.whitelists.user_defined_domains | type_debug == 'list'
+        - pihole.whitelists.user_defined_domains | length > 0 
+
+  rescue:
+    - name: Restore resolv.conf
+      ansible.builtin.include_role:
+        name: utils
+        tasks_from: backup_restore_file
+      vars:
+        source_file: /etc/resolv.conf
+        backup_folder: "{{ pihole_work_dir }}"
+        mode: restore
+
+    - name: Fail
+      ansible.builtin.fail:
+        msg: "Pihole installation failed. Review previous tasks outcomes for errors"

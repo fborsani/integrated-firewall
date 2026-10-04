@@ -1,0 +1,33 @@
+---
+- name: Generate IP blacklist rules
+  block:
+    - name: Create staging folder
+      ansible.builtin.file:
+        path: "{{ nftables_staging_folder }}"
+        state: directory
+
+    - name: Deploy blacklist rule generation script
+      ansible.builtin.template:
+        src: generate_blacklist.py.j2
+        dest: "{{ nftables_blacklist_generation_script }}"
+        owner: "{{ global.file_owner }}"
+        group: "{{ global.file_group }}"
+        mode: "0700"
+
+    - name: Run script
+      ansible.builtin.include_role:
+        name: utils
+        tasks_from: run_python.yml
+      vars:
+        script_path: "{{ nftables_blacklist_generation_script }}"
+
+  always:
+    - name: Remove staging folder
+      ansible.builtin.file:
+        path: "{{ nftables_staging_folder }}"
+        state: absent
+
+    - name: Remove script
+      ansible.builtin.file:
+        path: "{{ nftables_blacklist_generation_script }}"
+        state: absent

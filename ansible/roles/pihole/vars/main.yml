@@ -1,0 +1,17 @@
+---
+pihole_work_dir: "{{ global.work_dir }}/pihole"
+pihole_image: pihole/pihole
+pihole_container_name: pihole
+pihole_docker_network_name: pihole
+pihole_docker_sql_volume: "{{ pihole_work_dir }}/sql"
+pihole_docker_sql_file: "script.sql"
+pihole_container_sql_folder: "/sql"
+pihole_list_server_name: "list-server"
+pihole_list_server_port: 8080
+pihole_rule_configurator_script: "{{ pihole_work_dir }}/list_config.py"
+pihole_rule_files_staging_folder: "{{ pihole_work_dir }}/rule_staging"
+pihole_managed_resolv_conf_tag: "#---ansible-managed---"
+pihole_managed_list_comment: "ANSIBLE-MANAGED"
+pihole_resolv_conf_backup: "{{ pihole_work_dir }}/resolv.conf.bak"
+pihole_user_id: 2000
+pihole_group_id: 2000

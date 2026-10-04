@@ -1,0 +1,10 @@
+---
+- name: Stop Pi-hole container
+  community.docker.docker_container:
+    name: "{{ pihole_container_name }}"
+    state: stopped
+    restart_policy: unless-stopped
+
+- name: Restore resolv.conf
+  import_task:
+    file: restore_resolv_conf.yml

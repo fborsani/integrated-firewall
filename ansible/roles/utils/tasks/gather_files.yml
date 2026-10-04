@@ -1,0 +1,54 @@
+# Generate a list of files from a list of paths. If the path is a file is appended, else if
+# a path is a folder then all files within the folder are added. The script does not explore 
+# subfolders but stop at direct files within the target
+# Inputs:
+# - source_list: list of absolute paths
+# - output_var: name of variable that will hold the result
+# Outputs:
+# a sorted and trimmed list of paths stored in a variable specified by output_var
+
+---
+- name: Check that all source paths exist
+  ansible.builtin.stat:
+    path: "{{ item | trim }}"
+  loop: "{{ source_list }}"
+  register: source_stats
+
+- name: Fail if any source path does not exist
+  ansible.builtin.fail:
+    msg: "Source path does not exist: {{ item.item }}"
+  loop: "{{ source_stats.results }}"
+  when: not item.stat.exists
+
+- name: Find files in source directories
+  ansible.builtin.find:
+    paths: "{{ item.item | trim }}"
+    file_type: file
+    recurse: false
+  loop: "{{ source_stats.results }}"
+  when: item.stat.isdir
+  register: source_files
+
+- name: Build files_list
+  ansible.builtin.set_fact:
+    "{{ output_var }}": >-
+      {{
+        (
+          (
+            source_stats.results
+              | selectattr('stat.isreg', 'defined')
+              | selectattr('stat.isreg')
+              | map(attribute='item')
+              | list
+          )
+          +
+          (
+            source_files.results
+            | selectattr('files', 'defined')
+            | map(attribute='files')
+            | flatten
+            | map(attribute='path')
+            | list
+          )
+        )
+      }}

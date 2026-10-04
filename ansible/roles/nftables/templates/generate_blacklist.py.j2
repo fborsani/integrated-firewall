@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+
+import argparse
+import ipaddress
+import os
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+import requests
+
+
+IPV4_URLS_REMOTE = [
+    "https://example.com/ipv4-list-1.txt",
+    "https://example.com/ipv4-list-2.txt",
+]
+IPV4_URLS_LOCAL = []
+
+IPV6_URLS_REMOTE = [
+    "https://example.com/ipv6-list-1.txt",
+    "https://example.com/ipv6-list-2.txt",
+]
+IPV6_URLS_LOCAL = []
+
+
+STAGING_FOLDER = ""
+MAX_WORKERS = {{}}
+REQUEST_TIMEOUT = 60
+
+
+def download_file(url, ip_type, directory):
+    """Download one blocklist to a temporary, type-tagged file."""
+    filename = next(tempfile._get_candidate_names())
+    filename = f"{ip_type}-{filename}.txt"
+
+    path = Path(directory) / filename
+
+    try:
+        with requests.get(url, stream=True, timeout=REQUEST_TIMEOUT) as response:
+            response.raise_for_status()
+
+            with path.open("wb") as output:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        output.write(chunk)
+
+        return ip_type, path, None
+
+    except Exception as exc:
+        path.unlink(missing_ok=True)
+        return ip_type, path, exc
+
+
+def validate_entry(line, ip_type, path, line_number):
+    """
+    Validate one blocklist entry.
+
+    Accepts:
+        IPv4 address
+        IPv4 CIDR
+        IPv6 address
+        IPv6 CIDR
+
+    The address family must match the source file type.
+    """
+    try:
+        # strict=False allows network addresses such as:
+        # 192.0.2.1/24 -> 192.0.2.0/24
+        #
+        # If you want to reject non-canonical CIDRs instead,
+        # change this to strict=True.
+        network = ipaddress.ip_network(line, strict=False)
+
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid IP/CIDR in {path}, line {line_number}: {line!r}"
+        ) from exc
+
+    if ip_type == "ipv4" and network.version != 4:
+        raise ValueError(
+            f"IPv6 entry found in IPv4 list "
+            f"{path}, line {line_number}: {line!r}"
+        )
+
+    if ip_type == "ipv6" and network.version != 6:
+        raise ValueError(
+            f"IPv4 entry found in IPv6 list "
+            f"{path}, line {line_number}: {line!r}"
+        )
+
+    return line
+
+
+def write_set(output, set_name, ip_type, files):
+    """Write one validated nftables set."""
+    nft_type = "ipv4_addr" if ip_type == "ipv4" else "ipv6_addr"
+
+    output.write(f"    set {set_name} {{\n")
+    output.write(f"        type {nft_type}\n")
+    output.write("        flags interval, auto-merge\n")
+    output.write("        elements = {\n")
+
+    first_entry = True
+
+    for path in files:
+        with path.open(
+            "r",
+            encoding="utf-8",
+            errors="replace",
+        ) as input_file:
+
+            for line_number, line in enumerate(input_file, start=1):
+                line = line.strip()
+
+                # Ignore blank lines and comments.
+                if not line or line.startswith("#"):
+                    continue
+
+                # Validate the entry before writing it.
+                validate_entry(
+                    line,
+                    ip_type,
+                    path,
+                    line_number,
+                )
+
+                if not first_entry:
+                    output.write(",\n")
+
+                output.write(f"            {line}")
+
+                first_entry = False
+
+    output.write("\n")
+    output.write("        }\n")
+    output.write("    }\n")
+
+
+def generate_rules_file(
+    output_path,
+    ipv4_files,
+    ipv6_files,
+    ipv4_set_name,
+    ipv6_set_name,
+):
+    """Generate the complete nftables include file atomically."""
+    output_path = Path(output_path)
+    temporary_output = output_path.with_suffix(
+        output_path.suffix + ".tmp"
+    )
+
+    try:
+        with temporary_output.open(
+            "w",
+            encoding="utf-8",
+        ) as output:
+
+            write_set(
+                output,
+                ipv4_set_name,
+                "ipv4",
+                ipv4_files,
+            )
+
+            output.write("\n")
+
+            write_set(
+                output,
+                ipv6_set_name,
+                "ipv6",
+                ipv6_files,
+            )
+
+            output.flush()
+            os.fsync(output.fileno())
+
+        # Replace the previous generated file only after
+        # the complete new file has been successfully written.
+        temporary_output.replace(output_path)
+
+    except Exception:
+        temporary_output.unlink(missing_ok=True)
+        raise
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Download IP blocklists concurrently and "
+            "generate validated nftables sets."
+        )
+    )
+
+    parser.add_argument(
+        "--output",
+        required=True,
+        help="Path of the generated nftables rules file.",
+    )
+
+    parser.add_argument(
+        "--ipv4-set",
+        default="blacklist_ipv4",
+        help="Name of the IPv4 nftables set.",
+    )
+
+    parser.add_argument(
+        "--ipv6-set",
+        default="blacklist_ipv6",
+        help="Name of the IPv6 nftables set.",
+    )
+
+    args = parser.parse_args()
+
+    with tempfile.TemporaryDirectory(
+        prefix="blocklists-"
+    ) as download_dir:
+
+        ipv4_files = []
+        ipv6_files = []
+
+        with ThreadPoolExecutor(
+            max_workers=MAX_WORKERS
+        ) as executor:
+
+            futures = {}
+
+            for url in IPV4_URLS:
+                future = executor.submit(
+                    download_file,
+                    url,
+                    "ipv4",
+                    download_dir,
+                )
+                futures[future] = url
+
+            for url in IPV6_URLS:
+                future = executor.submit(
+                    download_file,
+                    url,
+                    "ipv6",
+                    download_dir,
+                )
+                futures[future] = url
+
+            for future in as_completed(futures):
+                url = futures[future]
+
+                ip_type, path, error = future.result()
+
+                if error is not None:
+                    raise RuntimeError(
+                        f"Failed to download {url}: {error}"
+                    ) from error
+
+                print(f"Downloaded [{ip_type}]: {url}")
+
+                if ip_type == "ipv4":
+                    ipv4_files.append(path)
+                else:
+                    ipv6_files.append(path)
+
+        print("All downloads completed.")
+        print("Validating entries and generating nftables rules...")
+
+        generate_rules_file(
+            output_path=args.output,
+            ipv4_files=ipv4_files,
+            ipv6_files=ipv6_files,
+            ipv4_set_name=args.ipv4_set,
+            ipv6_set_name=args.ipv6_set,
+        )
+
+        print(f"Generated: {args.output}")
+
+
+if __name__ == "__main__":
+    main()

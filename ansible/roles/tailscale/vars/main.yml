@@ -1,0 +1,5 @@
+---
+tailscale_work_dir: "{{ global.work_dir }}/tailscale"
+tailscale_image: tailscale/tailscale
+tailscale_container_name: tailscale
+tailscale_tun_interface: /dev/net/tun

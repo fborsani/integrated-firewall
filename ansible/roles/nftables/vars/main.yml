@@ -1,0 +1,14 @@
+---
+nftables_work_dir: "{{ global.work_dir }}/nftables"
+nftables_service_name: nftables
+nftables_default_table: /etc/nftables.conf
+nftables_default_table_managed_tag: "#---ansible-managed---"
+nftables_root_table: "blacklist_root"
+nftables_dns_rule_table_name: "filter_dns"
+nftables_staging_folder: "{{ nftables_work_dir }}/staging"
+nftables_dns_rule_table_file: "{{ nftables_work_dir }}/filter_dns.nft"
+nftables_blacklist_generation_script: "{{ nftables_work_dir }}/generate_blacklist.py"
+nftables_blacklist_rule_output_file: "{{ nftables_work_dir }}/generated_blacklist.nft"
+nftables_blacklist_set_ipv4_name: "blacklist_ipv4"
+nftables_blacklist_set_ipv6_name: "blacklist_ipv6"
+

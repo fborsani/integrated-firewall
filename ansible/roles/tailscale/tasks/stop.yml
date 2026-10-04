@@ -1,0 +1,19 @@
+- name: Stop Tailscale container
+  community.docker.docker_container:
+    name: "{{ tailscale_container_name }}"
+    state: stopped
+    restart_policy: unless-stopped
+
+- name: Disable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "0"
+    state: present
+    reload: true
+
+- name: Disable IPv6 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv6.conf.all.forwarding
+    value: "0"
+    state: present
+    reload: true

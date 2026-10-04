@@ -1,0 +1,51 @@
+{% set ipv4_addresses = nftables.user_defined_banned_ips.ipv4 | default([], true) | length > 0 %}
+{% set ipv6_addresses = nftables.user_defined_banned_ips.ipv6 | default([], true) | length > 0 %}
+{% set generated_rules_exist = generated_rule_file.stat.exists %}
+{% set include_dns_rules = pihole.enabled | default(False) %}
+
+table inet {{ nftables_root_table }} {
+{% if generated_rules_exist %}
+    include "{{ nftables_blacklist_rule_output_file }}"
+{% endif %}
+
+{% if ipv4_addresses %}
+
+    set user_defined_ipv4 {
+        type ipv4_addr
+        flags interval
+        elements = {
+{% for ip in ipv4_addresses %}
+            {{ ip }}
+{% endfor %}
+        }
+    }
+{% endif %}
+{% if ipv6_addresses %}
+
+    set user_defined_ipv6 {
+        type ipv6_addr
+        flags interval
+        elements = {
+{% for ip in ipv6_addresses %}
+            {{ ip }}
+{% endfor %}
+        }
+    }
+{% endif %}
+
+    chain forward {
+        type filter hook forward priority -10;
+        policy accept;
+{% if ipv4_addresses %}
+        ip daddr @user_defined_ipv4 drop
+{% endif %}
+{% if ipv6_addresses %}
+        ip6 daddr @user_defined_ipv6 drop
+{% endif %}
+
+{% if generated_rules_exist %}
+        ip daddr @{{ nftables_blacklist_set_ipv4_name }} drop
+        ip6 daddr @{{ nftables_blacklist_set_ipv6_name }} drop
+{% endif %}
+    }
+}

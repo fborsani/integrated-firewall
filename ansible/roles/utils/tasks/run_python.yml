@@ -1,0 +1,9 @@
+# Run a python script using the globally specified venv
+# Inputs:
+# - script_path: Path to script to execute
+# - output_var: Name of variable to use to store the script output
+---
+- name: Run script
+  ansible.builtin.command:
+    cmd: "{{ global.venv_path }}/bin/python {{ script_path }}"
+    register: "{{output_var }}"
