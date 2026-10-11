@@ -56,6 +56,9 @@
           PIHOLE_DNS_: "{{ pihole.upstream_dns | join(';') }}"
           PIHOLE_UID: "{{ pihole_user_id | string }}"
           PIHOLE_GID: "{{ pihole_group_id | string }}"
+          FTLCONF_dns_queryLogging: "{{ pihole.logging.enabled | default(pihole_logging_default_enabled) | string }}"
+          FTLCONF_database_maxDBdays: "{{ pihole.logging.retention_days | default(pihole_logging_default_retention_days) | string }}"
+          FTLCONF_misc_privacylevel: "{{ pihole.logging.privacy_level | default(pihole_logging_default_privacy_level) | string }}"
         capabilities:
           - NET_ADMIN
         pull: true

@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+
+import os
+import hashlib
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from urllib.parse import urlparse
+
+import requests
+from requests.adapters import HTTPAdapter
+from requests.exceptions import RequestException, Timeout, ConnectionError, HTTPError
+from urllib3.util.retry import Retry
+
+IPV4_URLS = {{ | to_json }}
+IPV6_URLS = {{ | to_json }}
+
+OUTPUT_PATH_IPV4 = "{{}}/{{}}"
+OUTPUT_PATH_IPV6 = "{{}}/{{}}"
+
+WORKERS = {{}}
+TIMEOUT = (10, 30)   #connect timeout, response timeout
+RETRIES = 3
+RETRY_BACKOFF = 5
+RETRY_CODES = [429, 500, 502, 503, 504]
+CHUNK_SIZE_MB = 1
+
+WORK_MODES = [
+    ("IP4", IPV4_URLS, OUTPUT_PATH_IPV4),
+    ("IP6", IPV6_URLS, OUTPUT_PATH_IPV6)
+]
+
+def get_filename(url) -> str:
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Invalid URL")
+
+    filename = Path(parsed.path).name
+
+    if not filename:
+        raise ValueError(f"URL does not point to a file")
+
+    encoded_url = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return f"{encoded_url}-{filename}"
+
+
+def download(url, dest_folder: str) -> tuple:
+    chunk_size = CHUNK_SIZE_MB*1024**2
+    output_path = f"{dest_folder}/{get_filename(url)}"
+    session = requests.Session()
+
+    fd, temp_name = tempfile.mkstemp(suffix=".part", dir=dest_folder)
+    temp_path = Path(temp_name)
+
+    retry_policy = Retry(
+        total=RETRIES,
+        backoff_factor=RETRY_BACKOFF,
+        status_forcelist=RETRY_CODES,
+        allowed_methods=["GET"],
+        respect_retry_after_header=True,
+        raise_on_status=False
+    )
+
+    adapter = HTTPAdapter(max_retries=retry_policy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    downloaded = 0
+
+    try:
+        with os.fdopen(fd, "wb") as file:
+            with session.get(url, stream=True, timeout=TIMEOUT, allow_redirects=False) as response:
+                response.raise_for_status()
+
+                content_length = int(response.headers.get("Content-Length", 0))
+
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded += len(chunk)
+
+            file.flush()
+            os.fsync(file.fileno())
+            
+            if content_length > 0 and downloaded != content_length:
+                raise IOError("Incomplete download")
+
+        os.replace(temp_path, output_path)
+        return (url, True, None)
+
+    except (Timeout, ConnectionError, HTTPError, IOError, RequestException, ValueError) as e:
+        error_message = str(e)
+
+        if isinstance(e, Timeout):
+            error_message = "Timeout"
+        elif isinstance(e, ConnectionError):
+            error_message = f"Connection error: {e}"
+        elif isinstance(e, HTTPError):
+            status = e.response.status_code if e.response else None
+            reason = e.response.reason if e.response else None
+            msg = e.response.text if e.response else None
+            error_message = f"HTTP error {status} - {reason}: {msg[:250]}"
+        elif isinstance(e, RequestException):
+            error_message = f"Request error: {e}"
+
+        return (url, False, error_message)
+
+    finally:
+        temp_path.unlink(missing_ok=True)
+        
+
+def pretty_print_errors(failures: list) -> None:
+    if not failures:
+        print("None")
+    else:
+        for item in failures:
+            url, err = item
+            print(f"- {url}: {err}")
+
+
+def parse_lists(work_mode: tuple) -> None:
+    tag, input, output = work_mode
+    failures = []
+    elements = len(input)
+    successes = 0
+
+    if elements == 0:
+        print(f"{tag} - Skipped: nothing to do")
+        return
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        futures = {
+            executor.submit(download, url, output): url
+            for url in input
+        }
+
+        for future in as_completed(futures):
+            url, success, message = future.result()
+            if success:
+                successes += 1
+            else:
+                failures.append((url, message))
+
+    print(f"{tag} - Execution completed")
+    print(f"parsed {elements} OK {successes} KO {len(failures)}")
+    print("Failures:")
+    pretty_print_errors(failures)
+
+
+def main():
+    if WORKERS < 1:
+        raise ValueError("WORKERS must be at least 1")
+
+    for work_mode in WORK_MODES:
+        parse_lists(work_mode)
+
+
+if __name__ == "__main__":
+    main()

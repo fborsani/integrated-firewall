@@ -28,27 +28,6 @@ MAX_WORKERS = {{}}
 REQUEST_TIMEOUT = 60
 
 
-def download_file(url, ip_type, directory):
-    """Download one blocklist to a temporary, type-tagged file."""
-    filename = next(tempfile._get_candidate_names())
-    filename = f"{ip_type}-{filename}.txt"
-
-    path = Path(directory) / filename
-
-    try:
-        with requests.get(url, stream=True, timeout=REQUEST_TIMEOUT) as response:
-            response.raise_for_status()
-
-            with path.open("wb") as output:
-                for chunk in response.iter_content(chunk_size=64 * 1024):
-                    if chunk:
-                        output.write(chunk)
-
-        return ip_type, path, None
-
-    except Exception as exc:
-        path.unlink(missing_ok=True)
-        return ip_type, path, exc
 
 
 def validate_entry(line, ip_type, path, line_number):

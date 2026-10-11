@@ -15,3 +15,6 @@ pihole_managed_list_comment: "ANSIBLE-MANAGED"
 pihole_resolv_conf_backup: "{{ pihole_work_dir }}/resolv.conf.bak"
 pihole_user_id: 2000
 pihole_group_id: 2000
+pihole_logging_default_enabled: true
+pihole_logging_default_retention_days: 15
+pihole_logging_default_privacy_level: 0
