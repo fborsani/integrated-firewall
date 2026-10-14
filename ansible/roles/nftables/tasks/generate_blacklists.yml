@@ -1,11 +1,32 @@
 ---
 - name: Generate IP blacklist rules
   block:
-    - name: Create staging folder
-      ansible.builtin.file:
-        path: "{{ nftables_staging_folder }}"
-        state: directory
+    - name: Get remote blacklists:
+      block:
+        - name: Create staging folder
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            loop:
+            - "{{ nftables_staging_folder_ipv4 }}"
+            - "{{ nftables_staging_folder_ipv6 }}"
 
+        - name: Deploy remote resources download script
+          ansible.builtin.template:
+            src: workers/get_remote_sources.py.j2
+            dest: "{{ nftables_remote_lists_download_script }}"
+            owner: "{{ global.file_owner }}"
+            group: "{{ global.file_group }}"
+            mode: "0700"
+      when: >
+        nftables.remote_blacklists.ipv4 | default([]) | length > 0 or
+        nftables.remote_blacklists.ipv6 | default([]) | length > 0
+      always:
+        - name: Remove download script
+          ansible.builtin.file:
+            path: "{{ nftables_remote_lists_download_script }}"
+            state: absent
+        
     - name: Deploy blacklist rule generation script
       ansible.builtin.template:
         src: generate_blacklist.py.j2
@@ -22,12 +43,11 @@
         script_path: "{{ nftables_blacklist_generation_script }}"
 
   always:
-    - name: Remove staging folder
-      ansible.builtin.file:
-        path: "{{ nftables_staging_folder }}"
-        state: absent
-
     - name: Remove script
       ansible.builtin.file:
         path: "{{ nftables_blacklist_generation_script }}"
+        state: absent
+    - name: Remove staging folder
+      ansible.builtin.file:
+        path: "{{ nftables_staging_folder }}"
         state: absent

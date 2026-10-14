@@ -12,13 +12,13 @@ from requests.adapters import HTTPAdapter
 from requests.exceptions import RequestException, Timeout, ConnectionError, HTTPError
 from urllib3.util.retry import Retry
 
-IPV4_URLS = {{ | to_json }}
-IPV6_URLS = {{ | to_json }}
+IPV4_URLS = {{ nftables.remote_blacklists.ipv4 | to_json }}
+IPV6_URLS = {{ nftables.remote_blacklists.ipv6 | to_json }}
 
-OUTPUT_PATH_IPV4 = "{{}}/{{}}"
-OUTPUT_PATH_IPV6 = "{{}}/{{}}"
+OUTPUT_PATH_IPV4 = "{{ nftables_staging_folder_ipv4 }}"
+OUTPUT_PATH_IPV6 = "{{ nftables_staging_folder_ipv6 }}"
 
-WORKERS = {{}}
+WORKERS = {{ nftables.remote_download_workers }}
 TIMEOUT = (10, 30)   #connect timeout, response timeout
 RETRIES = 3
 RETRY_BACKOFF = 5

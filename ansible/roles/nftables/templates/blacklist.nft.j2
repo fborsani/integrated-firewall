@@ -1,6 +1,6 @@
 {% set ipv4_addresses = nftables.user_defined_banned_ips.ipv4 | default([], true) | length > 0 %}
 {% set ipv6_addresses = nftables.user_defined_banned_ips.ipv6 | default([], true) | length > 0 %}
-{% set generated_rules_exist = generated_rule_file.stat.exists %}
+{% set generated_rules_exist = nftables_blacklist_rule_output_file.stat.exists %}
 {% set include_dns_rules = pihole.enabled | default(False) %}
 
 table inet {{ nftables_root_table }} {
